@@ -29,6 +29,11 @@ async def query_reevo_backend(
     import aiohttp
 
     backend_url = os.getenv("EXTERNAL_BACKEND_URL", "http://localhost:8000")
+    jwt_token = os.getenv("REEVO_JWT_TOKEN", "")
+    user_id = os.getenv("REEVO_USER_ID", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+    org_id = os.getenv("REEVO_ORG_ID", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+    use_reevo_api = os.getenv("USE_REEVO_API", "true").lower() == "true"
+    use_direct_reevo = os.getenv("USE_DIRECT_REEVO_API", "false").lower() == "true"
 
     # Prepare messages in the format expected by the external backend
     messages = []
@@ -41,12 +46,49 @@ async def query_reevo_backend(
     logger.info(
         f"  - Conversation history: {len(conversation_history) if conversation_history else 0} messages"
     )
+    logger.info(f"  - Using Reevo API: {use_reevo_api}")
+    logger.info(f"  - Direct Reevo API: {use_direct_reevo}")
 
     try:
         result = []
+
+        # Prepare headers and URL based on configuration
+        headers = {}
+
+        if use_direct_reevo:
+            # Call Reevo API directly
+            url = "https://api-ng-private-dev.reevo.ai/api/v1/chat"
+            headers = {
+                "Authorization": f"Bearer {jwt_token}"
+                if jwt_token
+                else "Bearer mock-jwt-token",
+                "x-reevo-user-id": user_id,
+                "x-reevo-org-id": org_id,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            logger.info(f"  - Calling Reevo API directly: {url}")
+        elif use_reevo_api:
+            # Use local proxy endpoint
+            url = f"{backend_url}/api/v1/chat"
+            headers = {
+                "Authorization": f"Bearer {jwt_token}"
+                if jwt_token
+                else "Bearer mock-jwt-token",
+                "x-reevo-user-id": user_id,
+                "x-reevo-org-id": org_id,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            logger.info(f"  - Using local Reevo API proxy: {url}")
+        else:
+            # Use legacy endpoint
+            url = f"{backend_url}/chat"
+            logger.info(f"  - Using legacy endpoint: {url}")
+
         async with (
             aiohttp.ClientSession() as session,
-            session.post(f"{backend_url}/chat", json={"messages": messages}) as resp,
+            session.post(url, json={"messages": messages}, headers=headers) as resp,
         ):
             resp.raise_for_status()
             # Stream the response

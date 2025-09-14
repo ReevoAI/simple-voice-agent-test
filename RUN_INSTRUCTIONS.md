@@ -17,11 +17,21 @@ If you want to use the external backend tool, start the FastAPI server in one te
 uvicorn external_backend:app --reload --port 8000
 ```
 
-The external backend will be available at `http://localhost:8000`
-- Chat endpoint: `http://localhost:8000/chat`
-- API docs: `http://localhost:8000/docs`
+The external backend will be available at `http://localhost:8000` with two endpoints:
 
-Note: The external backend is optional. The agent will work without it but won't have access to the `query_external_backend` tool.
+**Reevo-style API (default):**
+- Local proxy endpoint: `http://localhost:8000/api/v1/chat`
+- Proxies requests to actual Reevo API: `https://api-private.reevo.ai/api/v1/chat`
+- Requires JWT authentication in Authorization header
+- Headers: `x-reevo-user-id`, `x-reevo-org-id`
+
+**Legacy API:**
+- Endpoint: `http://localhost:8000/chat`
+- No authentication required
+
+**API Documentation:** `http://localhost:8000/docs`
+
+Note: The external backend is optional. The agent will work without it but won't have access to the `query_reevo_backend` tool.
 
 ### 3. Download Required Models
 If you haven't already, download the required models:
@@ -70,8 +80,18 @@ The agent will automatically call the external backend when:
 - You explicitly ask to "consult the external service"
 
 ### Configuration
-- Set `EXTERNAL_BACKEND_URL` in `.env.local` to change the backend URL
-- Default: `http://localhost:8000`
+Configure in `.env.local`:
+- `EXTERNAL_BACKEND_URL`: Backend base URL (default: `http://localhost:8000`)
+- `USE_REEVO_API`: Use Reevo-style API with auth (default: `true`, set to `false` for legacy)
+- `USE_DIRECT_REEVO_API`: Call Reevo API directly without proxy (default: `false`)
+- `REEVO_JWT_TOKEN`: JWT token for authentication (required for Reevo API)
+- `REEVO_USER_ID`: User ID for x-reevo-user-id header
+- `REEVO_ORG_ID`: Organization ID for x-reevo-org-id header
+
+**API Modes:**
+1. **Legacy mode** (`USE_REEVO_API=false`): Uses `/chat` endpoint with mock data
+2. **Proxy mode** (`USE_REEVO_API=true`, `USE_DIRECT_REEVO_API=false`): Routes through local backend which calls actual Reevo API
+3. **Direct mode** (`USE_DIRECT_REEVO_API=true`): Agent calls Reevo API directly without local backend
 
 ### Extending the Backend
 To customize the external backend:

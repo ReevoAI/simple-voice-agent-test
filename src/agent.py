@@ -108,12 +108,14 @@ async def entrypoint(ctx: JobContext):
     @session.on("function_calls_started")
     def _on_function_calls_started(ev):
         for call in ev.function_calls:
-            logger.info(f"🔧 Tool call started: {call.function_info.name} with arguments: {call.raw_arguments}")
+            logger.info(
+                f"🔧 Tool call started: {call.function_info.name} with arguments: {call.raw_arguments}"
+            )
 
     @session.on("function_calls_finished")
     def _on_function_calls_finished(ev):
         for call in ev.function_calls:
-            result = call.result if call.result else 'None'
+            result = call.result if call.result else "None"
             # Log full result if it's short, otherwise truncate
             if len(str(result)) <= 200:
                 logger.info(f"✅ Tool call finished: {call.function_info.name}")
