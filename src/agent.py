@@ -19,6 +19,9 @@ from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+# Import the external backend tool
+from tools import query_reevo_backend
+
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
@@ -30,7 +33,11 @@ class Assistant(Agent):
             instructions="""You are a helpful voice AI assistant.
             You eagerly assist users with their questions by providing information from your extensive knowledge.
             Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            You are curious, friendly, and have a sense of humor.
+
+            You have access to an external backend service that can provide specialized responses.
+            Use the query_reevo_backend tool when users ask for domain-specific information or
+            when you need to consult the external service for specialized processing.""",
         )
 
     # all functions annotated with @function_tool will be passed to the LLM when this
@@ -45,9 +52,12 @@ class Assistant(Agent):
             location: The location to look up weather information for (e.g. city name)
         """
 
-        logger.info(f"Looking up weather for {location}")
+        logger.info(f"🔧 Tool 'lookup_weather' called with location: {location}")
 
         return "sunny with a temperature of 70 degrees."
+
+    # Add the external backend query tool as a method
+    query_reevo_backend = query_reevo_backend
 
 
 def prewarm(proc: JobProcess):
@@ -93,6 +103,25 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
         session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
+
+    # Log tool calls for debugging
+    @session.on("function_calls_started")
+    def _on_function_calls_started(ev):
+        for call in ev.function_calls:
+            logger.info(f"🔧 Tool call started: {call.function_info.name} with arguments: {call.raw_arguments}")
+
+    @session.on("function_calls_finished")
+    def _on_function_calls_finished(ev):
+        for call in ev.function_calls:
+            result = call.result if call.result else 'None'
+            # Log full result if it's short, otherwise truncate
+            if len(str(result)) <= 200:
+                logger.info(f"✅ Tool call finished: {call.function_info.name}")
+                logger.info(f"   Result: {result}")
+            else:
+                logger.info(f"✅ Tool call finished: {call.function_info.name}")
+                logger.info(f"   Result (truncated): {str(result)[:200]}...")
+                logger.info(f"   Full result length: {len(str(result))} characters")
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
