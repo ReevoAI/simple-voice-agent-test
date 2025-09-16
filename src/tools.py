@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Optional
@@ -8,13 +9,84 @@ from livekit.agents.llm import function_tool
 logger = logging.getLogger("tools")
 
 
+def parse_reevo_streaming_response(raw_response: str) -> str:
+    """Parse Reevo API streaming response to extract only text content.
+
+    The Reevo API returns lines with prefixes:
+    - 0: text content
+    - 9: tool call info
+    - a: tool result
+    - 2: chat created event
+    - e/d: finish reasons
+    - f: message metadata
+    """
+    import re
+
+    lines = raw_response.strip().split("\n")
+    text_parts = []
+
+    for line in lines:
+        # Skip empty lines
+        if not line:
+            continue
+
+        # Check if line starts with '0:' which indicates text content
+        if line.startswith("0:"):
+            # Extract the text after '0:'
+            text = line[2:]
+            # Try to parse as JSON string
+            if text.startswith('"') and text.endswith('"'):
+                try:
+                    # Remove quotes and parse escape sequences
+                    text = json.loads(text)
+                    text_parts.append(text)
+                except json.JSONDecodeError:
+                    # If not valid JSON, use as-is (strip quotes)
+                    text_parts.append(text.strip('"'))
+            else:
+                text_parts.append(text)
+
+    # Join all text parts
+    full_text = "".join(text_parts)
+
+    # Remove markdown formatting for better TTS
+    # Remove headers (##, ###, etc.)
+    full_text = re.sub(r'^#{1,6}\s+', '', full_text, flags=re.MULTILINE)
+
+    # Remove bold/italic markers
+    full_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', full_text)  # Bold
+    full_text = re.sub(r'\*([^*]+)\*', r'\1', full_text)  # Italic
+    full_text = re.sub(r'__([^_]+)__', r'\1', full_text)  # Bold
+    full_text = re.sub(r'_([^_]+)_', r'\1', full_text)  # Italic
+
+    # Remove code blocks
+    full_text = re.sub(r'```[^`]*```', '', full_text)  # Multi-line code blocks
+    full_text = re.sub(r'`([^`]+)`', r'\1', full_text)  # Inline code
+
+    # Remove bullet points and numbered lists
+    full_text = re.sub(r'^\s*[-*+]\s+', '', full_text, flags=re.MULTILINE)  # Bullet points
+    full_text = re.sub(r'^\s*\d+\.\s+', '', full_text, flags=re.MULTILINE)  # Numbered lists
+
+    # Remove links but keep the text
+    full_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', full_text)  # [text](url)
+
+    # Clean up excessive whitespace
+    full_text = re.sub(r'\n{3,}', '\n\n', full_text)  # Max 2 newlines
+    full_text = re.sub(r' {2,}', ' ', full_text)  # Multiple spaces to single
+
+    # Remove any remaining markdown-style dividers
+    full_text = re.sub(r'^[-=*]{3,}$', '', full_text, flags=re.MULTILINE)
+
+    return full_text.strip()
+
+
 @function_tool
 async def query_reevo_backend(
     context: RunContext,
     query: str,
     conversation_history: Optional[list[dict[str, str]]] = None,
 ) -> str:
-    """Query the external backend API for specialized responses.
+    """Query the external backend API for specialized responses. Use it ALWAYS to check if there is meaningful information to be provided.
 
     This tool streams responses from an external service that can provide domain-specific
     information or custom processing beyond the agent's default capabilities.
@@ -96,9 +168,30 @@ async def query_reevo_backend(
                 if chunk:
                     result.append(chunk.decode("utf-8"))
 
-        response = "".join(result)
-        logger.info(f"📥 External backend response: {response}")
-        logger.info(f"🔧 Tool 'query_reevo_backend' returning: {response}")
+        raw_response = "".join(result)
+
+        # Parse response if using Reevo API
+        if use_direct_reevo or use_reevo_api:
+            response = parse_reevo_streaming_response(raw_response)
+            logger.info(f"📥 Raw Reevo response length: {len(raw_response)} chars")
+            logger.info(
+                f"📝 Parsed text response: {response[:200]}..."
+                if len(response) > 200
+                else f"📝 Parsed text response: {response}"
+            )
+        else:
+            # Legacy endpoint returns plain text
+            response = raw_response
+            logger.info(
+                f"📥 Legacy response: {response[:200]}..."
+                if len(response) > 200
+                else f"📥 Legacy response: {response}"
+            )
+
+        logger.info(
+            "🔧 Tool 'query_reevo_backend' returning clean text for TTS",
+            extra={"response": response},
+        )
         return response
 
     except aiohttp.ClientError as e:
