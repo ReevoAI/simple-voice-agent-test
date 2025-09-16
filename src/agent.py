@@ -1,6 +1,9 @@
 import logging
+import re
+from typing import AsyncIterable
 
 from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -16,6 +19,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm import function_tool
+from livekit.agents.voice import ModelSettings
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -30,15 +34,109 @@ load_dotenv(".env.local")
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="""You are a helpful voice AI assistant.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.
+            instructions="""You are a helpful voice AI assistant. You eagerly assist users with their questions by providing information from your extensive knowledge. You are curious, friendly, and have a sense of humor.
 
-            You have access to an external backend service that can provide specialized responses.
-            Use the query_reevo_backend tool when users ask for CRM domain-specific information or
-            when you need to consult the external service for specialized processing.""",
+            You have access to an external backend service that can provide specialized responses. Use the query_reevo_backend tool when users ask for CRM domain-specific information or when you need to consult the external service for specialized processing.
+
+            IMPORTANT: Respond in plain text only. DO NOT use markdown formatting including bold, italics, bullet points, numbered lists, or other markdown syntex. Your responses will be read aloud by text-to-speech.
+
+            Keep responses short while staying helpful and accurate.
+            """,
         )
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        """Override TTS node to add custom pronunciations."""
+
+        # Pronunciation replacements for technical terms and brand names
+        pronunciations = {
+            "Reevo": "Ree vo",
+            "API": "A P I",
+            "CRM": "C R M",
+            "JWT": "J W T",
+            "HTTP": "H T T P",
+            "URL": "U R L",
+            "SQL": "sequel",
+            "AI": "A I",
+        }
+
+        async def adjust_pronunciation(
+            input_text: AsyncIterable[str],
+        ) -> AsyncIterable[str]:
+            buffer = ""
+
+            async for chunk in input_text:
+                logger.info(f"🎤 TTS Input: {chunk!r}")
+                buffer += chunk
+
+                # Process buffer when we have complete sentences or enough content
+                sentences = re.split(r"([.!?]\s+)", buffer)
+
+                # If we have complete sentences, process them
+                if len(sentences) > 1:
+                    for i in range(0, len(sentences) - 1, 2):
+                        if i + 1 < len(sentences):
+                            sentence = sentences[i] + sentences[i + 1]
+
+                            if sentence.strip():
+                                # Apply pronunciation rules
+                                modified_sentence = sentence
+                                for term, pronunciation in pronunciations.items():
+                                    modified_sentence = re.sub(
+                                        rf"\b{re.escape(term)}\b",
+                                        pronunciation,
+                                        modified_sentence,
+                                        flags=re.IGNORECASE,
+                                    )
+
+                                if modified_sentence != sentence:
+                                    logger.info(
+                                        f"🎤 TTS Modified: {modified_sentence!r}"
+                                    )
+
+                                yield modified_sentence
+
+                    # Keep the last incomplete sentence in buffer
+                    buffer = sentences[-1] if sentences else ""
+
+                # If buffer is getting too long without sentence breaks, flush it
+                elif len(buffer) > 200:
+                    if buffer.strip():
+                        modified_buffer = buffer
+                        for term, pronunciation in pronunciations.items():
+                            modified_buffer = re.sub(
+                                rf"\b{re.escape(term)}\b",
+                                pronunciation,
+                                modified_buffer,
+                                flags=re.IGNORECASE,
+                            )
+
+                        if modified_buffer != buffer:
+                            logger.info(f"🎤 TTS Modified: {modified_buffer!r}")
+
+                        yield modified_buffer
+                    buffer = ""
+
+            # Process any remaining buffer content
+            if buffer.strip():
+                modified_buffer = buffer
+                for term, pronunciation in pronunciations.items():
+                    modified_buffer = re.sub(
+                        rf"\b{re.escape(term)}\b",
+                        pronunciation,
+                        modified_buffer,
+                        flags=re.IGNORECASE,
+                    )
+
+                if modified_buffer != buffer:
+                    logger.info(f"🎤 TTS Modified: {modified_buffer!r}")
+
+                yield modified_buffer
+
+        # Process with modified text through base TTS implementation
+        async for frame in super().tts_node(adjust_pronunciation(text), model_settings):
+            yield frame
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -56,7 +154,7 @@ class Assistant(Agent):
 
         # Generate a voice response immediately to let user know we're working
         try:
-            if hasattr(context, 'session') and context.session:
+            if hasattr(context, "session") and context.session:
                 context.session.generate_reply(
                     instructions="Say 'Let me check the weather' - keep it very brief"
                 )
@@ -93,8 +191,6 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(model="nova-3", language="multi"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all providers at https://docs.livekit.io/agents/integrations/tts/
-        # Switched from Cartesia to OpenAI TTS due to billing issue
-        # tts=openai.TTS(voice="nova"),
         tts=cartesia.TTS(voice="6f84f4b8-58a2-430c-8c79-688dad597532"),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
@@ -133,7 +229,7 @@ async def entrypoint(ctx: JobContext):
             # Generate a voice response to let user know we're working
             if call.function_info.name == "query_reevo_backend":
                 session.generate_reply(
-                    instructions="Say 'Let me check that for you' or 'One moment please while I look that up' - keep it very brief and natural"
+                    instructions="Say something like 'Let me check that for you, one moment...' - keep it very brief and natural"
                 )
             elif call.function_info.name == "lookup_weather":
                 session.generate_reply(
@@ -162,6 +258,7 @@ async def entrypoint(ctx: JobContext):
         def handler(ev):
             if "function" in event_name.lower() or "tool" in event_name.lower():
                 logger.info(f"🔧 DEBUG: Event '{event_name}' triggered with: {ev}")
+
         return handler
 
     # Common event patterns to try

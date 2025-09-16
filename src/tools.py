@@ -128,7 +128,7 @@ async def query_reevo_backend(
     # Generate a voice response immediately to let user know we're working
     try:
         # Use the context to get access to the session if available
-        if hasattr(context, 'session') and context.session:
+        if hasattr(context, "session") and context.session:
             context.session.generate_reply(
                 instructions="Say 'Let me check that for you' - keep it very brief"
             )
@@ -188,22 +188,25 @@ async def query_reevo_backend(
         raw_response = "".join(result)
 
         # Parse response if using Reevo API
-        if use_direct_reevo or use_reevo_api:
-            response = parse_reevo_streaming_response(raw_response)
-            logger.info(f"📥 Raw Reevo response length: {len(raw_response)} chars")
-            logger.info(
-                f"📝 Parsed text response: {response[:200]}..."
-                if len(response) > 200
-                else f"📝 Parsed text response: {response}"
-            )
-        else:
-            # Legacy endpoint returns plain text
-            response = raw_response
-            logger.info(
-                f"📥 Legacy response: {response[:200]}..."
-                if len(response) > 200
-                else f"📥 Legacy response: {response}"
-            )
+        # if use_direct_reevo or use_reevo_api:
+        #     response = parse_reevo_streaming_response(raw_response)
+        #     logger.info(f"📥 Raw Reevo response length: {len(raw_response)} chars")
+        #     logger.info(
+        #         f"📝 Parsed text response: {response[:200]}..."
+        #         if len(response) > 200
+        #         else f"📝 Parsed text response: {response}"
+        #     )
+        # else:
+        #     # Legacy endpoint returns plain text
+        #     response = raw_response
+        #     logger.info(
+        #         f"📥 Legacy response: {response[:200]}..."
+        #         if len(response) > 200
+        #         else f"📥 Legacy response: {response}"
+        #     )
+        #
+
+        response = raw_response
 
         logger.info(
             "🔧 Tool 'query_reevo_backend' returning clean text for TTS",
